@@ -1,0 +1,27 @@
+# Backup files
+*.backup
+*~
+*.old
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Editor temp files
+*.swp
+*.swo
+*.swn
+
+# Logs and cache
+*.log
+.cache/
+tmp/
+
+# Binary files
+*.o
+*.so
+*.a
+
+# Archives
+*.tar.gz
+*.zip
