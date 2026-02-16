@@ -1,97 +1,168 @@
 #!/bin/sh
-# myeeedistro deployment script 
+set -e
 
-echo "[myeeedistro] Deployment started..."
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-# --- Configuration ---
-REPO="$HOME/myeeedistro"
-CONFIGS="$REPO/configs"
-LOCAL_SRC="$HOME/.local/src/suckless"
-LOCAL_BIN="$HOME/.local/bin"
+# Output helpers
+info() {
+    echo -e "${GREEN}>>>${NC} $1"
+    sleep 0.5
+}
 
-# --- Helper: Safe symlink for configs ---
-link_config() {
+warn() {
+    echo -e "${YELLOW}>>> warning:${NC} $1"
+    sleep 0.5
+}
+
+error() {
+    echo -e "${RED}>>> error:${NC} $1"
+    exit 1
+}
+
+# --- Prerequisites -------------------------------------------------
+info "Checking prerequisites..."
+
+if [ "$(id -u)" -eq 0 ]; then
+    error "Do not run as root. Use a regular user with doas privileges."
+fi
+
+if ! command -v doas >/dev/null 2>&1; then
+    error "doas not found. Please install doas and configure it for your user."
+fi
+
+if ! doas -v >/dev/null 2>&1; then
+    error "doas not configured or user lacks privileges. Check /etc/doas.d/doas.conf"
+fi
+
+# --- Repository setup ----------------------------------------------
+info "Configuring Alpine repositories (edge + testing)..."
+
+doas cp /etc/apk/repositories /etc/apk/repositories.bak.$(date +%Y%m%d-%H%M%S)
+
+doas sh -c 'cat > /etc/apk/repositories << EOF
+https://dl-cdn.alpinelinux.org/alpine/v3.20/main
+https://dl-cdn.alpinelinux.org/alpine/v3.20/community
+https://dl-cdn.alpinelinux.org/alpine/edge/main
+https://dl-cdn.alpinelinux.org/alpine/edge/community
+https://dl-cdn.alpinelinux.org/alpine/edge/testing
+EOF'
+
+info "Updating package indexes..."
+doas apk update
+
+# --- Package installation ------------------------------------------
+info "Installing required packages..."
+
+PACKAGES="
+    alpine-base
+    build-base
+    linux-headers
+    ncurses-dev
+    libx11-dev
+    libxft-dev
+    libxinerama-dev
+    neovim
+    git
+    xclip
+    fzf
+    ripgrep
+    fd
+    python3
+    py3-pip
+    python3-dev
+    clang
+    clang-extra-tools
+    xwallpaper
+    curl
+    wget
+    htop
+    ncdu
+    tmux
+    ranger
+    unzip
+    tar
+    man-pages
+    mandoc
+    cheat
+    stow
+    terminus-font
+"
+
+doas apk add $PACKAGES
+
+doas setup-xorg-base
+
+# --- Clone/update myeeedistro repo --------------------------------
+REPO_DIR="$HOME/myeeedistro"
+if [ ! -d "$REPO_DIR" ]; then
+    info "Cloning myeeedistro repository..."
+    git clone https://github.com/Islam-Ahmetshin/myeeedistro.git "$REPO_DIR"
+else
+    info "Updating myeeedistro repository..."
+    cd "$REPO_DIR" && git pull
+fi
+
+# --- Link configuration files --------------------------------------
+info "Creating symlinks for configuration files..."
+
+link_file() {
     src="$1"
     dst="$2"
-    
-    if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then
-        echo "  ✓ Symlink exists: $(basename "$dst")"
-        return 0
-    fi
-    
     if [ -e "$dst" ] && [ ! -L "$dst" ]; then
-        mv "$dst" "${dst}.backup"
-        echo "  ! Backed up: $(basename "$dst")"
+        warn "$dst already exists and is not a symlink. Moving to ${dst}.bak"
+        mv "$dst" "${dst}.bak"
     fi
-    
-    mkdir -p "$(dirname "$dst")"
     ln -sf "$src" "$dst"
-    echo "  + Linked: $(basename "$dst") -> configs/"
 }
 
-# --- Helper: Build suckless tool ---
-build_tool() {
-    tool_dir="$1"
-    if [ ! -d "$tool_dir" ]; then
-        echo "  ✗ Source missing: $(basename "$tool_dir")"
-        return 1
-    fi
-    
-    cd "$tool_dir" || return 1
-    
-    # Создаем конфиг из стандартного, если его нет в репозитории
-    tool_name=$(basename "$tool_dir")
-    if [ ! -f "$CONFIGS/$tool_name/config.h" ]; then
-        echo "  ! Creating default config for $tool_name"
-        mkdir -p "$CONFIGS/$tool_name"
-        cp "config.def.h" "$CONFIGS/$tool_name/config.h"
-    fi
-    
-    # Копируем конфиг для сборки
-    cp -f "$CONFIGS/$tool_name/config.h" "config.h"
-    
-    echo "  Building $tool_name..."
-    if make PREFIX="$HOME/.local" clean install; then
-        echo "  ✓ Built: $tool_name"
-        return 0
-    else
-        echo "  ✗ Build failed: $tool_name"
-        return 1
-    fi
-}
-
-# --- Main deployment ---
-
-# 1. Ensure source directories exist
-echo ">> Checking sources..."
-for tool in dwm st dmenu; do
-    if [ ! -d "$LOCAL_SRC/$tool" ]; then
-        echo "  ✗ Missing: $tool source in $LOCAL_SRC/$tool/"
-        echo "  To fix: download sources to $LOCAL_SRC/$tool/"
-    fi
-done
-
-# 2. Build suckless tools
-echo ">> Building suckless tools..."
-for tool in st dwm dmenu; do
-    if [ -d "$LOCAL_SRC/$tool" ]; then
-        build_tool "$LOCAL_SRC/$tool"
-    fi
-done
-
-# 3. Deploy config files (symlinks)
-echo ">> Deploying configs..."
+# Shell configs
+link_file "$REPO_DIR/configs/shell/.xinitrc" "$HOME/.xinitrc"
+link_file "$REPO_DIR/configs/shell/.profile" "$HOME/.profile"
+link_file "$REPO_DIR/configs/shell/.ashrc" "$HOME/.ashrc"
+link_file "$REPO_DIR/configs/shell/.aliases" "$HOME/.aliases"
 
 # Neovim
-link_config "$CONFIGS/nvim/init.vim" "$HOME/.config/nvim/init.vim"
+mkdir -p "$HOME/.config/nvim"
+link_file "$REPO_DIR/configs/nvim/init.vim" "$HOME/.config/nvim/init.vim"
 
-# Shell
-link_config "$CONFIGS/shell/.profile" "$HOME/.profile"
-link_config "$CONFIGS/shell/.aliases" "$HOME/.aliases"
+# --- Build suckless tools -----------------------------------------
+info "Building suckless software (dwm, st, dmenu)..."
 
-# 4. Final instructions
-echo ""
-echo ">> Deployment complete!"
-echo "   • Restart dwm: Ctrl+Alt+Backspace"
-echo "   • Apply shell changes: source ~/.profile"
-echo "   • Check binaries in: $LOCAL_BIN"
+SUCKLESS_DIR="$HOME/.local/src/suckless"
+mkdir -p "$SUCKLESS_DIR"
+
+build_suckless() {
+    name="$1"
+    repo_url="$2"
+    config_dir="$REPO_DIR/configs/$name"
+
+    cd "$SUCKLESS_DIR"
+    if [ ! -d "$name" ]; then
+        git clone "$repo_url" "$name"
+    else
+        cd "$name" && git pull
+    fi
+
+    cd "$SUCKLESS_DIR/$name"
+    if [ -f "$config_dir/config.h" ]; then
+        cp "$config_dir/config.h" config.h
+    else
+        warn "No custom config.h for $name, using default."
+    fi
+
+    make clean
+    make
+    doas make install
+}
+
+build_suckless "dwm"   "git://git.suckless.org/dwm"
+build_suckless "st"    "git://git.suckless.org/st"
+build_suckless "dmenu" "git://git.suckless.org/dmenu"
+
+# --- Done ---------------------------------------------------------
+info "Deployment complete!"
+info "You can now start X with 'startx' (or 'xinit')."
