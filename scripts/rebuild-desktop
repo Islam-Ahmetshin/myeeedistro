@@ -1,0 +1,4 @@
+#!/bin/sh
+make -C ~/.local/src/suckless/dwm clean install
+make -C ~/.local/src/suckless/st clean install
+make -C ~/.local/src/suckless/dmenu clean install
